@@ -1,27 +1,68 @@
 import flet as ft
-import mysql.connector
-from openpyxl import Workbook
+from openpyxl import load_workbook, Workbook
+import os
 
-# Koneksi ke database MySQL
-mydb = mysql.connector.connect(
-    host="localhost",
-    user="root",
-    password="",
-    database="mobile_app"
-)
+# Fungsi untuk membaca data dari file Excel
+def load_data_from_excel(file_name):
+    workbook = load_workbook(filename=file_name)
+    sheet = workbook.active
+    data = []
+    for row in sheet.iter_rows(min_row=2, values_only=True):  # Mengabaikan header
+        data.append(row)
+    return data
 
-cursor = mydb.cursor()
+# Fungsi untuk menambah data ke file Excel
+def add_data_to_excel(file_name, name, age, subscription, employment):
+    if not os.path.exists(file_name):
+        # Jika file tidak ada, buat dengan struktur yang diperlukan
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.append(["ID", "Name", "Age", "Subscription", "Employment"])  # Menambah header
+        workbook.save(file_name)
+
+    # Coba buka workbook untuk read/write
+    try:
+        workbook = load_workbook(filename=file_name)
+        sheet = workbook.active
+
+        # Hitung ID baru berdasarkan jumlah baris
+        next_id = sheet.max_row  # ID adalah nomor baris berikutnya (karena header ada di baris pertama)
+
+        # Tambahkan row baru ke sheet
+        sheet.append([next_id, name, age, subscription, employment])
+
+        # Simpan workbook dan pastikan file ditutup
+        workbook.save(file_name)
+        workbook.close()  # Pastikan workbook ditutup
+
+    except PermissionError:
+        # Tangani error jika terjadi masalah dengan izin file
+        print(f"PermissionError: Unable to write to file '{file_name}'. Please check the file permissions.")
 
 def main(page: ft.Page):
     page.title = "User Subscription Table"
     page.theme_mode = ft.ThemeMode.LIGHT
-    page.window_height = 475
-    page.window_width = 830
-    page.window_maximizable = False
+
+    # Nama file Excel (gunakan path absolut untuk menghindari masalah)
+    excel_file = r"D:\Kuliah\SEMESTER 7\Mobile Application Development\Project\mobile_praktik_1\data\user_data.xlsx"
+
+    # Pastikan folder 'data' ada, jika tidak buat foldernya
+    if not os.path.exists("data"):
+        os.makedirs("data")
+
+    # Inisialisasi file Excel jika belum ada
+    try:
+        load_workbook(excel_file)
+    except FileNotFoundError:
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.append(["ID", "Name", "Age", "Subscription", "Employment"])  # Header
+        workbook.save(excel_file)
 
     # Definisikan DataTable
     data_table = ft.DataTable(
         columns=[
+            ft.DataColumn(ft.Text("ID")),
             ft.DataColumn(ft.Text("Name")),
             ft.DataColumn(ft.Text("Age")),
             ft.DataColumn(ft.Text("Subscription")),
@@ -30,17 +71,18 @@ def main(page: ft.Page):
         rows=[],  # Inisialisasi rows kosong
     )
 
-    # Fungsi untuk mengambil data dari database dan mengisi DataTable
+    # Fungsi untuk menampilkan data dari Excel ke dalam DataTable
     def tampil_user():
-        sql = "SELECT * FROM user_subs"
-        cursor.execute(sql)
-        result = cursor.fetchall()
-
-        # Loop data dari database dan tambahkan ke DataTable
-        for row in result:
+        data_table.rows.clear()  # Kosongkan data sebelum diisi
+        data = load_data_from_excel(excel_file)
+        if not data:  # Cek apakah data kosong
+            page.snack_bar = ft.SnackBar(ft.Text("No data found in Excel!"))
+            page.snack_bar.open = True
+        for row in data:
             data_table.rows.append(
                 ft.DataRow(
                     cells=[
+                        ft.DataCell(ft.Text(str(row[0]))),  # ID
                         ft.DataCell(ft.Text(row[1])),  # Name
                         ft.DataCell(ft.Text(str(row[2]))),  # Age
                         ft.DataCell(ft.Text(row[3])),  # Subscription
@@ -52,7 +94,7 @@ def main(page: ft.Page):
 
     # Buat form input untuk menambah data baru
     name_input = ft.TextField(label="Name")
-    age_input = ft.TextField(label="Age")  # Gunakan TextField untuk Age
+    age_input = ft.TextField(label="Age")
     subscription_input = ft.Dropdown(
         label="Subscription",
         options=[
@@ -67,41 +109,32 @@ def main(page: ft.Page):
     def add_row(e):
         # Pastikan nilai Age adalah angka
         if age_input.value.isdigit():
-            new_row = ft.DataRow(
-                cells=[
-                    ft.DataCell(ft.Text(name_input.value)),
-                    ft.DataCell(ft.Text(age_input.value)),
-                    ft.DataCell(ft.Text(subscription_input.value)),
-                    ft.DataCell(ft.Text("Employed" if employed_input.value else "Unemployed")),
-                ]
-            )
-            data_table.rows.append(new_row)
-            page.update()
+            try:
+                # Tambah data ke Excel
+                add_data_to_excel(
+                    excel_file, 
+                    name_input.value, 
+                    age_input.value, 
+                    subscription_input.value, 
+                    "Employed" if employed_input.value else "Unemployed"
+                )
+
+                # Bersihkan input setelah menambah data
+                name_input.value = ""
+                age_input.value = ""
+                subscription_input.value = None
+                employed_input.value = False
+
+                # Refresh DataTable setelah menambah data baru
+                tampil_user()
+
+            except PermissionError:
+                # Tampilkan pesan error jika gagal menulis ke file
+                page.snack_bar = ft.SnackBar(ft.Text("Permission denied: Unable to write to the file!"))
+                page.snack_bar.open = True
+                page.update()
         else:
-            page.snack_bar = ft.SnackBar(ft.Text("Age must be a number!"))
-            page.snack_bar.open = True
-            page.update()
-
-    # Fungsi untuk menyimpan data ke database
-    def insert_data(e):
-        if age_input.value.isdigit():
-            employment_status = "Employed" if employed_input.value else "Unemployed"
-            insert_query = "INSERT INTO user_subs (name, age, subscription, employment) VALUES (%s, %s, %s, %s)"
-            values = (name_input.value, age_input.value, subscription_input.value, employment_status)
-            cursor.execute(insert_query, values)
-            mydb.commit()
-
-            # Setelah insert, tambah row baru ke DataTable
-            add_row(e)
-
-            # Bersihkan input setelah data di-insert
-            name_input.value = ""
-            age_input.value = ""
-            subscription_input.value = None
-            employed_input.value = False
-            page.update()
-
-        else:
+            # Tampilkan pesan error jika Age bukan angka
             page.snack_bar = ft.SnackBar(ft.Text("Age must be a number!"))
             page.snack_bar.open = True
             page.update()
@@ -116,7 +149,7 @@ def main(page: ft.Page):
                     age_input,
                     subscription_input,
                     employed_input,
-                    ft.ElevatedButton("Insert", on_click=insert_data, color=ft.colors.BLUE),
+                    ft.ElevatedButton("Insert", on_click=add_row, color=ft.colors.BLUE),
                     ft.Switch(label="Mode", value=True),
                 ], expand=1),
                 border=ft.border.all(1, ft.colors.GREY),  # Tambahkan border abu-abu
@@ -135,7 +168,7 @@ def main(page: ft.Page):
         ])
     )
 
-    # Panggil fungsi untuk menampilkan data dari database
+    # Panggil fungsi untuk menampilkan data dari Excel
     tampil_user()
 
 # Jalankan aplikasi
